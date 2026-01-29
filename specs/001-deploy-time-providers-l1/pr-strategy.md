@@ -157,13 +157,13 @@ tests/unit/initcontainer_test.go  (+250 lines, new)
 
 ---
 
-### PR #4: run.yaml Merging Logic
+### PR #4: config.yaml Merging Logic
 **Size**: ~650 lines
 **Review Time**: 2 hours
 **Merge Strategy**: Merge after PR #2 (independent of PR #3)
 
 **Tasks**: T018-T024, T024a-h, T040-T042 (18 tasks)
-- T018-T024: run.yaml merging implementation
+- T018-T024: config.yaml merging implementation
 - T024a-c: extra-providers.yaml generation from provider metadata
 - T024d-h: Merge tool binary implementation
 - T040-T042: Unit tests for merging
@@ -178,7 +178,7 @@ Dockerfile                         (+5 lines, merge tool binary)
 ```
 
 **Description**:
-This PR implements the run.yaml merging logic and introduces the extra-providers.yaml schema for forward compatibility. The merge tool binary is included in the operator image to support Phase 2 migration where external tooling can read extra-providers.yaml.
+This PR implements the config.yaml merging logic and introduces the extra-providers.yaml schema for forward compatibility. The merge tool binary is included in the operator image to support Phase 2 migration where external tooling can read extra-providers.yaml.
 
 **Tests**:
 - Base + external merge
@@ -443,7 +443,7 @@ PR #1 (Foundation)
    ├─→ PR #2 (Validation)
    │      ├─→ PR #3 (Init Containers)
    │      │      └─→ PR #5 (Controller Integration) ──→ PR #6 (Status) ──→ PR #7 (Docs) ──→ PR #8 (Errors)
-   │      └─→ PR #4 (run.yaml Merge) ──┘
+   │      └─→ PR #4 (config.yaml Merge) ──┘
    │
    └─→ (PR #3 and PR #4 can be developed in parallel after PR #2)
 ```

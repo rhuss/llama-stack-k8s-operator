@@ -10,13 +10,13 @@ Implement external provider injection for llama-stack K8s operator using init co
 
 **Technical Approach**: Two-phase init container architecture using `extra-providers.yaml` schema:
 1. **Phase 1 - Install**: N init containers (one per provider, in CRD order) install Python packages and copy metadata
-2. **Phase 2 - Merge**: Single init container (operator image) generates `extra-providers.yaml` from metadata, merges with user run.yaml (if exists)
-3. **Main container**: Uses merged run.yaml, PYTHONPATH includes external provider packages
+2. **Phase 2 - Merge**: Single init container (operator image) generates `extra-providers.yaml` from metadata, merges with user config.yaml (if exists)
+3. **Main container**: Uses merged config.yaml, PYTHONPATH includes external provider packages
 
 **Forward Compatibility**: The `extra-providers.yaml` schema enables future migration to native LlamaStack support (Phase 2) with minimal operator changes.
 
 **Note on Phase Terminology**: This plan describes *implementation phases* (development sequence: Phase 0-6). The spec's "Container Startup Sequence" section describes *runtime phases* (pod lifecycle: Phase 1-5). These are complementary views:
-- Plan Phases 2-3 (Init Container Generation, run.yaml Merging) implement spec's runtime Phases 1-3 (Provider Install, Config Extract, Merge)
+- Plan Phases 2-3 (Init Container Generation, config.yaml Merging) implement spec's runtime Phases 1-3 (Provider Install, Config Extract, Merge)
 - Plan Phase 4 (Controller Integration) orchestrates all runtime phases
 - Spec runtime phases describe what happens at pod startup; plan phases describe when to build each component
 
@@ -71,7 +71,7 @@ pkg/
 │   └── validation.go        # Provider validation logic
 └── deploy/
     ├── initcontainer.go     # Init container generation
-    └── runyaml.go           # run.yaml merging logic
+    └── runyaml.go           # config.yaml merging logic
 
 tests/
 ├── integration/
@@ -220,7 +220,7 @@ func ValidateMetadata(m *ProviderMetadata) error {
 	}
 	// PackageName will be used by LlamaStack to import the provider module:
 	// module = importlib.import_module(provider_spec.module)
-	// This maps to the 'module:' field in run.yaml/extra-providers.yaml
+	// This maps to the 'module:' field in config.yaml/extra-providers.yaml
 
 	if m.Spec.ProviderType == "" {
 		return fmt.Errorf("spec.providerType is required")
@@ -258,7 +258,7 @@ func ValidateMetadata(m *ProviderMetadata) error {
 6. Write unit tests for init container generation
 
 **Phase 1 Init Containers**: Install provider packages and copy metadata (one per provider, in CRD order)
-**Phase 2 Merge Init Container**: Runs merge tool from operator image to generate `extra-providers.yaml` and merge with user run.yaml
+**Phase 2 Merge Init Container**: Runs merge tool from operator image to generate `extra-providers.yaml` and merge with user config.yaml
 
 **Files Created**:
 - `pkg/deploy/initcontainer.go`
@@ -444,20 +444,20 @@ ENTRYPOINT ["/manager"]
 
 **Task Reference**: This change is captured in T024g "Update Dockerfile to include merge-run-yaml binary"
 
-### Phase 3: run.yaml Merging Logic
+### Phase 3: config.yaml Merging Logic
 
-**Objective**: Implement merge tool that generates `extra-providers.yaml` and merges with user run.yaml
+**Objective**: Implement merge tool that generates `extra-providers.yaml` and merges with user config.yaml
 
 **Tasks**:
 1. Create `cmd/merge-run-yaml/main.go` - standalone binary for merge init container
 2. Create `pkg/deploy/runyaml.go` - core merge logic
 3. Implement extra-providers.yaml generation from provider metadata
-4. Implement merge algorithm (user run.yaml + extra-providers.yaml → final run.yaml)
+4. Implement merge algorithm (user config.yaml + extra-providers.yaml → final config.yaml)
 5. Add conflict detection and resolution
 6. Add API placement validation
 7. Write comprehensive unit tests for all merge scenarios
 
-**Note**: This merge tool will be packaged in the operator image and run in Phase 2 init container. The `extra-providers.yaml` format matches run.yaml provider structure, enabling future migration to native LlamaStack `--extra-providers` flag support.
+**Note**: This merge tool will be packaged in the operator image and run in Phase 2 init container. The `extra-providers.yaml` format matches config.yaml provider structure, enabling future migration to native LlamaStack `--extra-providers` flag support.
 
 **Files Created**:
 - `pkg/deploy/runyaml.go`
@@ -476,7 +476,7 @@ import (
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/provider"
 )
 
-// RunYamlConfig represents the run.yaml structure
+// RunYamlConfig represents the config.yaml structure
 type RunYamlConfig struct {
 	Version   int                              `yaml:"version"`
 	ImageName string                           `yaml:"image_name"`
@@ -492,7 +492,7 @@ type ProviderConfigEntry struct {
 	Config       map[string]interface{} `yaml:"config"`
 }
 
-// MergeRunYaml generates final run.yaml by merging all sources
+// MergeRunYaml generates final config.yaml by merging all sources
 func MergeRunYaml(
 	baseConfig *RunYamlConfig,
 	userConfig *RunYamlConfig,
@@ -761,7 +761,7 @@ func extractErrorMessage(status *corev1.ContainerStatus) string {
 **Unit Tests**:
 - Metadata parsing (valid, invalid, missing fields)
 - Init container generation (ordering, script content)
-- run.yaml merging (all precedence scenarios)
+- config.yaml merging (all precedence scenarios)
 - Validation logic (duplicate IDs, API mismatches)
 
 **Integration Tests**:
@@ -789,7 +789,7 @@ func extractErrorMessage(status *corev1.ContainerStatus) string {
 | CRD ordering of init containers | Deterministic, predictable behavior that preserves user intent | Random ordering could cause non-deterministic failures, alphabetical ignores user intent |
 | Metadata in image vs CRD | Single source of truth, avoid duplication/mismatch | CRD metadata could diverge from actual provider implementation |
 | EmptyDir volume vs ConfigMap | Supports large provider packages, writable | ConfigMap has size limits, read-only |
-| extra-providers.yaml schema | Forward-compatible with future LlamaStack native support | Extracting run.yaml from distribution images is brittle and fragile |
+| extra-providers.yaml schema | Forward-compatible with future LlamaStack native support | Extracting config.yaml from distribution images is brittle and fragile |
 
 ## Alternative Approaches Considered
 
@@ -813,29 +813,29 @@ func extractErrorMessage(status *corev1.ContainerStatus) string {
 ### Decision: extra-providers.yaml as Forward-Compatible Format
 
 **Rationale**:
-- Distribution images contain built-in run.yaml at non-standardized paths
-- Extracting run.yaml is brittle and fragile across versions
-- Schema evolution in run.yaml would break merge logic across LlamaStack versions
+- Distribution images contain built-in config.yaml at non-standardized paths
+- Extracting config.yaml is brittle and fragile across versions
+- Schema evolution in config.yaml would break merge logic across LlamaStack versions
 - Better long-term solution: Let LlamaStack handle merge via `--extra-providers` flag
 
 **Current Implementation** (Phase 1 - this feature):
 ```
 Merge Init Container:
   1. Read provider metadata files
-  2. Generate extra-providers.yaml (matches run.yaml provider structure)
-  3. Merge user run.yaml (if exists) + extra-providers.yaml
-  4. Write final run.yaml for main container
+  2. Generate extra-providers.yaml (matches config.yaml provider structure)
+  3. Merge user config.yaml (if exists) + extra-providers.yaml
+  4. Write final config.yaml for main container
 ```
 
 **Future Enhancement** (Phase 2 - when LlamaStack adds support):
 ```
 Main Container Args:
-  llama stack run /etc/llama-stack/run.yaml \
+  llama stack run /etc/llama-stack/config.yaml \
     --extra-providers /etc/extra-providers/extra-providers.yaml
 ```
 
 **Benefits**:
-- ✅ No brittle path discovery for run.yaml in distribution images
+- ✅ No brittle path discovery for config.yaml in distribution images
 - ✅ Schema evolution handled by LlamaStack (not operator)
 - ✅ Clean migration path (~20 lines of operator code)
 - ✅ Enables other tools to use same schema (Docker Compose, Helm, etc.)
@@ -847,7 +847,7 @@ Main Container Args:
 **Before Implementation**:
 - [ ] llama-stack supports module-based provider loading (verify in codebase)
 - [ ] Provider images available for testing (create sample provider)
-- [ ] Understanding of llama-stack run.yaml structure (documented)
+- [ ] Understanding of llama-stack config.yaml structure (documented)
 - [ ] Define extra-providers.yaml schema (see spec.md)
 - [ ] Create merge tool binary in operator image (cmd/merge-run-yaml)
 

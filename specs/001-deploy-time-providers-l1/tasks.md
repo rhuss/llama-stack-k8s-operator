@@ -79,7 +79,7 @@ This is a Kubernetes operator project in Go:
 - [ ] T017 [US1] Implement UpdatePythonPath() to prepend external provider path in pkg/deploy/initcontainer.go
 - [ ] T017a [US1] Create generateMergeConfigInitContainer() for Phase 2 merge step in pkg/deploy/initcontainer.go
 
-#### run.yaml Merging
+#### config.yaml Merging
 
 - [ ] T018 [P] [US1] Create RunYamlConfig struct in pkg/deploy/runyaml.go
 - [ ] T019 [P] [US1] Create ProviderConfigEntry struct in pkg/deploy/runyaml.go
@@ -96,7 +96,7 @@ This is a Kubernetes operator project in Go:
 
 - [ ] T024d [P] [US1] Create cmd/merge-run-yaml/main.go with CLI argument parsing
 - [ ] T024e [US1] Implement merge logic: generate extra-providers.yaml from metadata
-- [ ] T024f [US1] Implement merge logic: combine user run.yaml + extra-providers.yaml
+- [ ] T024f [US1] Implement merge logic: combine user config.yaml + extra-providers.yaml
 - [ ] T024g [US1] Update Dockerfile to include merge-run-yaml binary in operator image
 - [ ] T024h [P] [US1] Unit test merge tool logic in tests/unit/merge_tool_test.go
 
@@ -107,7 +107,7 @@ This is a Kubernetes operator project in Go:
 - [ ] T027 [US1] Add external providers volume to pod spec in controllers/llamastackdistribution_controller.go
 - [ ] T028 [US1] Mount external providers volume in main container in controllers/llamastackdistribution_controller.go
 - [ ] T029 [US1] Update PYTHONPATH environment variable in main container in controllers/llamastackdistribution_controller.go
-- [ ] T030 [US1] Call MergeRunYaml() during run.yaml generation in controllers/llamastackdistribution_controller.go
+- [ ] T030 [US1] Call MergeRunYaml() during config.yaml generation in controllers/llamastackdistribution_controller.go
 
 #### Status Tracking
 
@@ -123,7 +123,7 @@ This is a Kubernetes operator project in Go:
 - [ ] T037 [P] [US1] Unit test init container generation in tests/unit/initcontainer_test.go
 - [ ] T038 [P] [US1] Unit test init container ordering (CRD order by API type) in tests/unit/initcontainer_test.go
 - [ ] T039 [P] [US1] Unit test volume mount generation in tests/unit/initcontainer_test.go
-- [ ] T040 [P] [US1] Unit test run.yaml merge scenarios in tests/unit/merge_test.go
+- [ ] T040 [P] [US1] Unit test config.yaml merge scenarios in tests/unit/merge_test.go
 - [ ] T041 [P] [US1] Unit test duplicate provider ID detection in tests/unit/merge_test.go
 - [ ] T042 [P] [US1] Unit test API placement validation in tests/unit/merge_test.go
 - [ ] T043 [US1] Integration test: single external provider installation in tests/integration/external_providers_test.go
@@ -283,10 +283,10 @@ This is a Kubernetes operator project in Go:
 
 For User Story 1:
 - Init container code before controller integration
-- run.yaml merging before controller integration
-- Both init container + run.yaml merging can proceed in parallel
+- config.yaml merging before controller integration
+- Both init container + config.yaml merging can proceed in parallel
 - Status tracking can start early (parallel with other work)
-- Controller integration depends on init container + run.yaml being done
+- Controller integration depends on init container + config.yaml being done
 - Testing can start as soon as implementation is done
 
 ### Parallel Opportunities
@@ -297,7 +297,7 @@ For User Story 1:
 
 **Phase 3 (User Story 1)**:
 - T012-T013 can run in parallel (init container helpers)
-- T018-T019 can run in parallel (run.yaml structs)
+- T018-T019 can run in parallel (config.yaml structs)
 - T031-T032 can run in parallel (status tracking helpers)
 - T037-T042 all test files can run in parallel
 - T046-T048 all docs can run in parallel
@@ -330,7 +330,7 @@ For User Story 1:
 Task: "Create GenerateInitContainers() function in pkg/deploy/initcontainer.go"
 Task: "Create collectAllProviders() helper function in pkg/deploy/initcontainer.go"
 
-# Launch run.yaml merging tasks in parallel:
+# Launch config.yaml merging tasks in parallel:
 Task: "Create RunYamlConfig struct in pkg/deploy/runyaml.go"
 Task: "Create ProviderConfigEntry struct in pkg/deploy/runyaml.go"
 
@@ -342,7 +342,7 @@ Task: "Implement getCurrentPod() helper in controllers/external_providers.go"
 Task: "Unit test init container generation in tests/unit/initcontainer_test.go"
 Task: "Unit test init container ordering in tests/unit/initcontainer_test.go"
 Task: "Unit test volume mount generation in tests/unit/initcontainer_test.go"
-Task: "Unit test run.yaml merge scenarios in tests/unit/merge_test.go"
+Task: "Unit test config.yaml merge scenarios in tests/unit/merge_test.go"
 Task: "Unit test duplicate provider ID detection in tests/unit/merge_test.go"
 Task: "Unit test API placement validation in tests/unit/merge_test.go"
 ```
@@ -379,7 +379,7 @@ With multiple developers:
 1. **Together**: Complete Setup + Foundational (Phases 1-2)
 2. **After Foundational complete**:
    - **Developer A**: User Story 1 - Init container generation (T012-T017)
-   - **Developer B**: User Story 1 - run.yaml merging (T018-T024)
+   - **Developer B**: User Story 1 - config.yaml merging (T018-T024)
    - **Developer C**: User Story 1 - Status tracking (T031-T036)
 3. **Integration**: Developer A completes controller integration (T025-T030) after B completes
 4. **Testing**: All developers write tests in parallel (T037-T048)

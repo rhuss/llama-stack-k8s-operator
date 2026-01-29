@@ -12,8 +12,8 @@ The `extra-providers.yaml` file is a **forward-compatible** configuration format
 
 **Current Implementation** (Phase 1):
 - Operator generates `extra-providers.yaml` as ConfigMap
-- Merge init container combines it with base run.yaml
-- LlamaStack receives merged run.yaml
+- Merge init container combines it with base config.yaml
+- LlamaStack receives merged config.yaml
 
 **Future Implementation** (Phase 2 - when LlamaStack adds support):
 - Operator generates `extra-providers.yaml` as ConfigMap (same as Phase 1)
@@ -31,7 +31,7 @@ The `extra-providers.yaml` file is a **forward-compatible** configuration format
 apiVersion: llamastack.io/v1alpha1
 kind: ExternalProviders
 
-# Providers organized by API type (matches run.yaml structure)
+# Providers organized by API type (matches config.yaml structure)
 providers:
   inference:
     - provider_id: my-vllm-inference
@@ -83,11 +83,11 @@ providers:
 
 ---
 
-## Compatibility with run.yaml
+## Compatibility with config.yaml
 
-The `extra-providers.yaml` schema **exactly matches** the `providers` section of `run.yaml`:
+The `extra-providers.yaml` schema **exactly matches** the `providers` section of `config.yaml`:
 
-**run.yaml format**:
+**config.yaml format**:
 ```yaml
 version: 2
 image_name: llamastack/distribution-remote-vllm
@@ -310,7 +310,7 @@ providers: {}
 
 ### Updated Merge Init Container
 
-**Purpose**: Generate `extra-providers.yaml` from metadata, then merge with base run.yaml
+**Purpose**: Generate `extra-providers.yaml` from metadata, then merge with base config.yaml
 
 ```yaml
 initContainers:
@@ -318,10 +318,10 @@ initContainers:
   image: <operator-image>
   command: ["/usr/local/bin/merge-run-yaml"]
   args:
-    - "--base=/etc/base-config/run.yaml"           # User ConfigMap (if exists) or empty
+    - "--base=/etc/base-config/config.yaml"           # User ConfigMap (if exists) or empty
     - "--metadata-dir=/opt/external-providers/metadata"
     - "--extra-providers-output=/shared/extra-providers.yaml"  # Generate this first
-    - "--output=/shared/final/run.yaml"            # Final merged output
+    - "--output=/shared/final/config.yaml"            # Final merged output
   volumeMounts:
     - name: config-merge
       mountPath: /shared
@@ -340,14 +340,14 @@ func main() {
     extraProviders := generateExtraProvidersFromMetadata(metadataDir)
     writeYaml(extraProvidersOutput, extraProviders)
 
-    // 2. Merge base run.yaml + extra-providers.yaml
+    // 2. Merge base config.yaml + extra-providers.yaml
     baseConfig := readYaml(basePath)
     mergedConfig := mergeProviders(baseConfig, extraProviders)
     writeYaml(outputPath, mergedConfig)
 }
 ```
 
-**Result**: Both `/shared/extra-providers.yaml` AND `/shared/final/run.yaml` are available
+**Result**: Both `/shared/extra-providers.yaml` AND `/shared/final/config.yaml` are available
 
 ---
 
@@ -362,17 +362,17 @@ func main() {
 
 ### Problem
 External provider integration currently requires:
-1. Parsing base run.yaml
+1. Parsing base config.yaml
 2. Merging provider definitions
 3. Handling schema evolution across versions
 
-This is brittle and doesn't scale as the run.yaml schema evolves.
+This is brittle and doesn't scale as the config.yaml schema evolves.
 
 ### Proposed Solution
 Add native support for external provider files:
 
 ```bash
-llama stack run /etc/llama-stack/run.yaml \
+llama stack run /etc/llama-stack/config.yaml \
   --extra-providers /etc/extra-providers.yaml
 ```
 
@@ -411,17 +411,17 @@ providers:
 initContainers:
 - name: merge-config
   image: operator-image
-  # Generates /shared/final/run.yaml
+  # Generates /shared/final/config.yaml
 
 containers:
 - name: llama-stack
   command: ["/bin/sh", "-c"]
   args:
-    - llama stack run /etc/llama-stack/run.yaml
+    - llama stack run /etc/llama-stack/config.yaml
   volumeMounts:
     - name: config-merge
-      mountPath: /etc/llama-stack/run.yaml
-      subPath: final/run.yaml
+      mountPath: /etc/llama-stack/config.yaml
+      subPath: final/config.yaml
 ```
 
 **After** (Phase 2 - native support):
@@ -432,7 +432,7 @@ containers:
 - name: llama-stack
   command: ["/bin/sh", "-c"]
   args:
-    - llama stack run /etc/llama-stack/run.yaml --extra-providers /etc/extra-providers/extra-providers.yaml
+    - llama stack run /etc/llama-stack/config.yaml --extra-providers /etc/extra-providers/extra-providers.yaml
   volumeMounts:
     - name: user-config-source  # User ConfigMap
       mountPath: /etc/llama-stack
@@ -552,7 +552,7 @@ Pod Volumes:
   /shared/
     ├── extra-providers.yaml          # Copy for merge process
     └── final/
-        └── run.yaml                  # Merged result (Phase 1 only)
+        └── config.yaml                  # Merged result (Phase 1 only)
 
   /opt/external-providers/
     ├── python-packages/              # pip installed packages
@@ -569,7 +569,7 @@ Pod Volumes:
 - ✅ **Clean schema** - Defined, versioned, documented
 - ✅ **Testable** - Generate extra-providers.yaml independently
 - ✅ **Debuggable** - Can inspect extra-providers.yaml in pod
-- ✅ **No run.yaml extraction** - Don't need to find/parse distribution run.yaml
+- ✅ **No config.yaml extraction** - Don't need to find/parse distribution config.yaml
 
 ### Phase 2 (Future - Native Support)
 - ✅ **Minimal migration** - Just remove merge init container, add flag
@@ -591,7 +591,7 @@ Pod Volumes:
 - [ ] Implement generateExtraProvidersYaml() function
 - [ ] Create reconcileExtraProvidersConfigMap() in controller
 - [ ] Update merge tool to generate extra-providers.yaml from metadata
-- [ ] Update merge tool to merge extra-providers into run.yaml
+- [ ] Update merge tool to merge extra-providers into config.yaml
 - [ ] Mount extra-providers ConfigMap in merge init container
 - [ ] Add validation for provider definitions
 - [ ] Unit tests for generation logic
@@ -613,7 +613,7 @@ The `extra-providers.yaml` schema is a **strategic design choice** that:
 
 1. **Solves current need** - Enable external providers without LlamaStack changes
 2. **Prepares for future** - Clean migration path when LlamaStack adds native support
-3. **Reduces complexity** - No run.yaml extraction/parsing needed
+3. **Reduces complexity** - No config.yaml extraction/parsing needed
 4. **Enables evolution** - LlamaStack owns schema, handles versioning
 5. **Doesn't block progress** - Can implement and deploy today
 

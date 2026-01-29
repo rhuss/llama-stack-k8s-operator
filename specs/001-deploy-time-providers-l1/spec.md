@@ -54,7 +54,7 @@ As a developer debugging a failed deployment, I need clear error messages when p
 4. **Given** a provider image with imagePullBackOff error, **When** the pod fails to start, **Then** the LLSD status shows "Failed to pull provider image {image}" with clear message about image pull credentials
 5. **Given** a provider with invalid YAML in lls-provider-spec.yaml, **When** the init container parses metadata, **Then** the error message shows the YAML parse error with line number
 6. **Given** a provider wheel file that fails pip install, **When** installation runs, **Then** the error includes pip's output and suggests checking wheel compatibility
-7. **Given** distribution image with no run.yaml at known paths, **When** config extraction runs, **Then** the init container fails with error indicating missing run.yaml and suggesting to provide user ConfigMap
+7. **Given** distribution image with no config.yaml at known paths, **When** config extraction runs, **Then** the init container fails with error indicating missing config.yaml and suggesting to provide user ConfigMap
 8. **Given** two external providers with duplicate providerId, **When** merge runs, **Then** the merge container fails with error listing both provider images and the duplicate ID
 
 ### Edge Cases
@@ -94,7 +94,7 @@ As a developer debugging a failed deployment, I need clear error messages when p
 #### CRD API Contract
 
 - **FR-006**: LLSD CRD MUST add `externalProviders` field to `ServerSpec` structure
-- **FR-007**: `externalProviders` MUST organize providers by API type (inference, safety, agents, etc.) matching run.yaml structure
+- **FR-007**: `externalProviders` MUST organize providers by API type (inference, safety, agents, etc.) matching config.yaml structure
 - **FR-008**: Each external provider reference MUST include: providerId (unique instance name), image (container image reference), optional config (provider-specific JSON)
 - **FR-009**: `providerId` MUST be unique across all providers (inline, remote, and external)
 - **FR-010**: The CRD MUST NOT include `providerType` field - this is declared by the provider image metadata
@@ -110,7 +110,7 @@ As a developer debugging a failed deployment, I need clear error messages when p
 
 #### Configuration Merging
 
-- **FR-017**: The operator MUST generate run.yaml by merging (in order): user ConfigMap run.yaml (if exists) → external providers (using extra-providers.yaml schema)
+- **FR-017**: The operator MUST generate config.yaml by merging (in order): user ConfigMap config.yaml (if exists) → external providers (using extra-providers.yaml schema)
 - **FR-018**: When the same providerId appears in multiple sources, external providers MUST take precedence
 - **FR-019**: When external provider overrides existing providerId, a WARNING MUST be logged with details
 - **FR-020**: When two external providers declare the same providerId, deployment MUST fail with error listing both images
@@ -277,8 +277,8 @@ type ExternalProviderStatus struct {
 
 The operator MUST merge configurations in this order (later overrides earlier):
 
-1. **Base run.yaml** from distribution image (if exists)
-2. **User ConfigMap run.yaml** (if `spec.server.userConfig.configMapName` specified - completely replaces base)
+1. **Base config.yaml** from distribution image (if exists)
+2. **User ConfigMap config.yaml** (if `spec.server.userConfig.configMapName` specified - completely replaces base)
 3. **External providers** from `spec.server.externalProviders` (merged into providers section)
 
 **Provider ID Conflict Resolution**:
@@ -290,16 +290,16 @@ The operator MUST merge configurations in this order (later overrides earlier):
 The merge process combines base configuration (from distribution or user ConfigMap) with external provider definitions using provider ID-based override semantics.
 
 **Inputs**:
-- Base run.yaml (from distribution default or user ConfigMap)
+- Base config.yaml (from distribution default or user ConfigMap)
 - External provider metadata (from provider images + CRD configuration)
 
 **Outputs**:
-- Final merged run.yaml
+- Final merged config.yaml
 - Warnings log for any provider ID conflicts
 
 **Merge Behavior**:
 
-1. **Start with base configuration**: Load the base run.yaml as the foundation
+1. **Start with base configuration**: Load the base config.yaml as the foundation
 
 2. **Process each external provider**:
    - Identify the target API section (e.g., inference, safety, agents)
@@ -442,29 +442,29 @@ flowchart TD
     P1B3 -->|Success| P2{User ConfigMap<br/>specified?}
 
     P2 -->|No| P2A[Init Container: Extract Config]
-    P2A --> P2A1[Try /opt/app-root/run.yaml]
-    P2A1 -->|Found| P2A2[Copy to /opt/llama-stack/base-config/run.yaml]
-    P2A1 -->|Not found| P2A3[Try /etc/llama-stack/run.yaml]
+    P2A --> P2A1[Try /opt/app-root/config.yaml]
+    P2A1 -->|Found| P2A2[Copy to /opt/llama-stack/base-config/config.yaml]
+    P2A1 -->|Not found| P2A3[Try /etc/llama-stack/config.yaml]
     P2A3 -->|Found| P2A2
-    P2A3 -->|Not found| Fail5[Pod Fails:<br/>No run.yaml in distribution image]
+    P2A3 -->|Not found| Fail5[Pod Fails:<br/>No config.yaml in distribution image]
     P2A2 --> P3
 
-    P2 -->|Yes| P2B[Mount ConfigMap at<br/>/opt/llama-stack/base-config/run.yaml]
+    P2 -->|Yes| P2B[Mount ConfigMap at<br/>/opt/llama-stack/base-config/config.yaml]
     P2B --> P3
 
     P3[Init Container: Merge Config] --> P3A[Scan /opt/llama-stack/external-providers/metadata/]
     P3A --> P3B[Read lls-provider-spec.yaml + crd-config.yaml<br/>for each provider]
     P3B --> P3C[Generate extra-providers.yaml]
-    P3C --> P3D[Merge with base run.yaml]
-    P3D --> P3E[Write final run.yaml to<br/>/opt/llama-stack/config/run.yaml]
+    P3C --> P3D[Merge with base config.yaml]
+    P3D --> P3E[Write final config.yaml to<br/>/opt/llama-stack/config/config.yaml]
     P3E -->|Success| P4
 
     P4[Main Container Starts] --> P4A[Set PYTHONPATH]
-    P4A --> P4B[Run: llama-stack preflight<br/>--run-yaml=/opt/llama-stack/config/run.yaml]
+    P4A --> P4B[Run: llama-stack preflight<br/>--config=/opt/llama-stack/config/config.yaml]
     P4B -->|Exit 0| P5
     P4B -->|Exit ≠ 0| Fail1[Container Fails:<br/>Preflight validation error]
 
-    P5[Start Server] --> P5A[Run: llama stack run<br/>/opt/llama-stack/config/run.yaml]
+    P5[Start Server] --> P5A[Run: llama stack run<br/>/opt/llama-stack/config/config.yaml]
     P5A --> P5B[Load providers from config]
     P5B --> P5C[Server Ready:<br/>Providers available via /v1/providers API]
     P5C --> Success([Pod Running])
@@ -515,27 +515,27 @@ For each external provider in CRD order:
 
 This phase only runs when NO user ConfigMap is specified in CRD:
 1. Init container starts using **distribution image** (same as main container)
-2. Searches for distribution's default run.yaml in known paths:
-   - `/opt/app-root/run.yaml` (newer distributions)
-   - `/etc/llama-stack/run.yaml` (legacy path)
-3. If found, copies run.yaml to: `/opt/llama-stack/base-config/run.yaml` on shared volume
-4. If neither path exists: **FAILS** with error indicating distribution doesn't contain run.yaml
+2. Searches for distribution's default config.yaml in known paths:
+   - `/opt/app-root/config.yaml` (newer distributions)
+   - `/etc/llama-stack/config.yaml` (legacy path)
+3. If found, copies config.yaml to: `/opt/llama-stack/base-config/config.yaml` on shared volume
+4. If neither path exists: **FAILS** with error indicating distribution doesn't contain config.yaml
 5. On success: Proceeds to Phase 3
 
-**Note**: If user ConfigMap is specified, this phase is skipped and the ConfigMap is mounted directly at `/opt/llama-stack/base-config/run.yaml`.
+**Note**: If user ConfigMap is specified, this phase is skipped and the ConfigMap is mounted directly at `/opt/llama-stack/base-config/config.yaml`.
 
 **Phase 3: Configuration Merge (Init Container)**
 
 After all provider init containers and optional config extraction complete:
 1. Merge init container starts (uses operator's own image, detected via Downward API - see "Merge Init Container Specification")
-2. Reads base configuration from: `/opt/llama-stack/base-config/run.yaml` (from ConfigMap mount OR extracted in Phase 2)
+2. Reads base configuration from: `/opt/llama-stack/base-config/config.yaml` (from ConfigMap mount OR extracted in Phase 2)
 3. Scans external provider metadata directory: `/opt/llama-stack/external-providers/metadata/`
 4. For each provider directory, reads:
    - `lls-provider-spec.yaml` (provider type, module, api)
    - `crd-config.yaml` (providerId, api section, user config)
 5. Generates `extra-providers.yaml` from combined metadata
 6. Merges configurations (see "Merge Order and Precedence" and "Configuration Merge Algorithm" sections)
-7. Writes final run.yaml to: `/opt/llama-stack/config/run.yaml`
+7. Writes final config.yaml to: `/opt/llama-stack/config/config.yaml`
 8. On success: Main container starts
 9. On failure: Pod fails with merge error details
 
@@ -543,7 +543,7 @@ After all provider init containers and optional config extraction complete:
 
 Main container starts, before llama-stack server:
 1. Environment variable `PYTHONPATH` prepended with: `/opt/llama-stack/external-providers/python-packages`
-2. Preflight validation runs: `llama-stack preflight --run-yaml=/opt/llama-stack/config/run.yaml`
+2. Preflight validation runs: `llama-stack preflight --config=/opt/llama-stack/config/config.yaml`
 3. Preflight validates (see lls-preflight-spec.md):
    - Architecture compatibility (native extensions match platform)
    - Provider module imports successfully
@@ -555,7 +555,7 @@ Main container starts, before llama-stack server:
 **Phase 5: Server Start**
 
 After preflight succeeds:
-1. llama-stack server starts: `llama stack run /opt/llama-stack/config/run.yaml`
+1. llama-stack server starts: `llama stack run /opt/llama-stack/config/config.yaml`
 2. Server loads providers from merged configuration
 3. External providers available via API: `/v1/providers`
 4. Pod transitions to Running, LLSD status updated to Ready
@@ -595,7 +595,7 @@ providers:
 | `config` | CRD `externalProviders.<api>.<n>.config` | Provider-specific configuration |
 
 **Why this schema**:
-- Matches run.yaml provider structure exactly
+- Matches config.yaml provider structure exactly
 - Forward-compatible with future LlamaStack native support
 - Enables clean separation of base vs external providers
 
@@ -614,7 +614,7 @@ providers:
   - `lls-provider-spec.yaml` - Provider package metadata (from provider image)
   - `crd-config.yaml` - CRD-provided configuration (providerId, api, config)
 - `/opt/llama-stack/external-providers/installed-packages.txt` - Record of installed packages
-- `/opt/llama-stack/config/run.yaml` - Final merged configuration
+- `/opt/llama-stack/config/config.yaml` - Final merged configuration
 - `/opt/llama-stack/config/extra-providers.yaml` - Generated external providers config
 
 ### Environment Variables
@@ -652,12 +652,12 @@ volumes:
 | Container Type | Path | Access Mode | Purpose |
 |---|---|---|---|
 | Provider init containers | `/opt/llama-stack/external-providers` | readWrite | Install packages, write metadata |
-| Config extraction init | `/opt/llama-stack/base-config` | readWrite | Write extracted run.yaml |
+| Config extraction init | `/opt/llama-stack/base-config` | readWrite | Write extracted config.yaml |
 | Merge init container | `/opt/llama-stack/external-providers` | readOnly | Read provider metadata |
-| Merge init container | `/opt/llama-stack/base-config` | readOnly | Read base run.yaml |
-| Merge init container | `/opt/llama-stack/config` | readWrite | Write merged run.yaml |
+| Merge init container | `/opt/llama-stack/base-config` | readOnly | Read base config.yaml |
+| Merge init container | `/opt/llama-stack/config` | readWrite | Write merged config.yaml |
 | Main container | `/opt/llama-stack/external-providers` | readOnly | Access installed packages |
-| Main container | `/opt/llama-stack/config` | readOnly | Read final run.yaml |
+| Main container | `/opt/llama-stack/config` | readOnly | Read final config.yaml |
 
 **Directory Structure** (on shared volume):
 ```
@@ -672,9 +672,9 @@ volumes:
 │   │       └── crd-config.yaml
 │   └── installed-packages.txt    # Installation log
 ├── base-config/
-│   └── run.yaml                  # Extracted or mounted base config
+│   └── config.yaml                  # Extracted or mounted base config
 └── config/
-    ├── run.yaml                  # Final merged config
+    ├── config.yaml                  # Final merged config
     ├── extra-providers.yaml      # Generated external providers
     └── merge-log.txt             # Merge operation log
 ```
@@ -695,7 +695,7 @@ volumes:
 
 ### Config Extraction Init Container Specification
 
-This init container extracts the distribution's default run.yaml when no user ConfigMap is specified.
+This init container extracts the distribution's default config.yaml when no user ConfigMap is specified.
 
 **When Added**:
 - Only when `spec.server.userConfig.configMapName` is NOT specified
@@ -705,7 +705,7 @@ This init container extracts the distribution's default run.yaml when no user Co
 **Container Configuration**:
 - **Name**: `extract-distribution-config`
 - **Image**: Distribution image (same as `spec.image` from LLSD)
-- **Command**: Shell script to find and copy run.yaml
+- **Command**: Shell script to find and copy config.yaml
 
 **Command Logic**:
 ```bash
@@ -713,26 +713,26 @@ This init container extracts the distribution's default run.yaml when no user Co
 set -e
 
 # Try newer path first
-if [ -f /opt/app-root/run.yaml ]; then
-  echo "Found run.yaml at /opt/app-root/run.yaml"
-  cp /opt/app-root/run.yaml /opt/llama-stack/base-config/run.yaml
+if [ -f /opt/app-root/config.yaml ]; then
+  echo "Found config.yaml at /opt/app-root/config.yaml"
+  cp /opt/app-root/config.yaml /opt/llama-stack/base-config/config.yaml
   exit 0
 fi
 
 # Try legacy path
-if [ -f /etc/llama-stack/run.yaml ]; then
-  echo "Found run.yaml at /etc/llama-stack/run.yaml"
-  cp /etc/llama-stack/run.yaml /opt/llama-stack/base-config/run.yaml
+if [ -f /etc/llama-stack/config.yaml ]; then
+  echo "Found config.yaml at /etc/llama-stack/config.yaml"
+  cp /etc/llama-stack/config.yaml /opt/llama-stack/base-config/config.yaml
   exit 0
 fi
 
-# No run.yaml found - fail with error
-echo "ERROR: No run.yaml found in distribution image"
+# No config.yaml found - fail with error
+echo "ERROR: No config.yaml found in distribution image"
 echo "Checked paths:"
-echo "  - /opt/app-root/run.yaml (not found)"
-echo "  - /etc/llama-stack/run.yaml (not found)"
+echo "  - /opt/app-root/config.yaml (not found)"
+echo "  - /etc/llama-stack/config.yaml (not found)"
 echo ""
-echo "Resolution: Either provide a user ConfigMap with run.yaml or use a distribution image that includes run.yaml"
+echo "Resolution: Either provide a user ConfigMap with config.yaml or use a distribution image that includes config.yaml"
 exit 1
 ```
 
@@ -740,14 +740,14 @@ exit 1
 - Shared volume mounted at `/opt/llama-stack/base-config/` (readWrite)
 
 **Exit Behavior**:
-- Exits with code 0 if run.yaml is found and copied successfully
-- Exits with code 1 if no run.yaml is found at known paths
-- Pod fails with clear error message indicating missing run.yaml
+- Exits with code 0 if config.yaml is found and copied successfully
+- Exits with code 1 if no config.yaml is found at known paths
+- Pod fails with clear error message indicating missing config.yaml
 
-**Rationale for Failure on Missing run.yaml**:
-- Distribution images without run.yaml likely indicate misconfiguration
+**Rationale for Failure on Missing config.yaml**:
+- Distribution images without config.yaml likely indicate misconfiguration
 - Explicit failure is better than silent fallback to empty config
-- Users must either provide user ConfigMap or use distribution with run.yaml
+- Users must either provide user ConfigMap or use distribution with config.yaml
 - Prevents confusing runtime errors from empty/incomplete configuration
 
 **Future Compatibility**:
@@ -756,7 +756,7 @@ exit 1
 
 ### Merge Init Container Specification
 
-The merge init container generates the final `run.yaml` configuration by combining base config with external provider definitions.
+The merge init container generates the final `config.yaml` configuration by combining base config with external provider definitions.
 
 **Container Image Discovery**:
 
@@ -814,10 +814,10 @@ The operator uses its own image for the merge init container to avoid maintainin
 
 **Inputs** (mounted volumes):
 - `/opt/llama-stack/external-providers/metadata/` - Provider metadata directories (shared volume, readOnly)
-- `/opt/llama-stack/base-config/run.yaml` - Base run.yaml (shared volume from Phase 2, OR ConfigMap mount if user-provided, readOnly)
+- `/opt/llama-stack/base-config/config.yaml` - Base config.yaml (shared volume from Phase 2, OR ConfigMap mount if user-provided, readOnly)
 
 **Outputs** (mounted volumes):
-- `/opt/llama-stack/config/run.yaml` - Final merged configuration (shared volume, readWrite)
+- `/opt/llama-stack/config/config.yaml` - Final merged configuration (shared volume, readWrite)
 - `/opt/llama-stack/config/extra-providers.yaml` - Generated external providers file (shared volume, readWrite)
 - `/opt/llama-stack/config/merge-log.txt` - Merge operation log with warnings (shared volume, readWrite)
 
@@ -835,8 +835,8 @@ The operator uses its own image for the merge init container to avoid maintainin
    - If duplicates found → Fail with error listing duplicate IDs
 
 3. **Load base configuration**:
-   - Read `/opt/llama-stack/base-config/run.yaml`
-   - Parse YAML into run.yaml structure
+   - Read `/opt/llama-stack/base-config/config.yaml`
+   - Parse YAML into config.yaml structure
 
 4. **Generate extra-providers.yaml**:
    - For each discovered provider, create entry:
@@ -854,7 +854,7 @@ The operator uses its own image for the merge init container to avoid maintainin
    - Log warnings for overridden providers to merge-log.txt
 
 6. **Write outputs**:
-   - Write final run.yaml to `/opt/llama-stack/config/run.yaml`
+   - Write final config.yaml to `/opt/llama-stack/config/config.yaml`
    - Write extra-providers.yaml to `/opt/llama-stack/config/extra-providers.yaml`
    - Write merge log to `/opt/llama-stack/config/merge-log.txt`
 
@@ -875,7 +875,7 @@ The operator uses its own image for the merge init container to avoid maintainin
 When LlamaStack adds native `--extra-providers` flag support, the merge init container can be simplified:
 - **Keep**: Generation of `extra-providers.yaml` from metadata
 - **Remove**: Merging logic (let LlamaStack handle it)
-- **Change**: Main container args to: `llama stack run /etc/llama-stack/run.yaml --extra-providers /opt/llama-stack/config/extra-providers.yaml`
+- **Change**: Main container args to: `llama stack run /etc/llama-stack/config.yaml --extra-providers /opt/llama-stack/config/extra-providers.yaml`
 - **Remove**: Config extraction init container (not needed)
 
 This clean migration path ensures the operator can easily adopt native LlamaStack support when available.
@@ -1202,12 +1202,12 @@ The `extra-providers.yaml` schema is designed for forward compatibility. When Ll
 
 **Current Implementation (Phase 1)**:
 - Merge init container generates `extra-providers.yaml` from metadata
-- Merge init container combines user run.yaml + extra-providers.yaml → final run.yaml
-- Main container uses merged run.yaml
+- Merge init container combines user config.yaml + extra-providers.yaml → final config.yaml
+- Main container uses merged config.yaml
 
 **Future Implementation (Phase 2)**:
 - Merge init container ONLY generates `extra-providers.yaml` (no merge step)
-- Main container started with: `llama stack run /etc/llama-stack/run.yaml --extra-providers /etc/extra-providers/extra-providers.yaml`
+- Main container started with: `llama stack run /etc/llama-stack/config.yaml --extra-providers /etc/extra-providers/extra-providers.yaml`
 - LlamaStack handles merge internally
 
 **Migration Impact**:
