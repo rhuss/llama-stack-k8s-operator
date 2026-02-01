@@ -25,6 +25,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 const (
@@ -44,8 +45,13 @@ const (
 	LlamaStackDistributionKind = "LlamaStackDistribution"
 )
 
-// DefaultStorageSize is the default size for persistent storage
-var DefaultStorageSize = resource.MustParse("10Gi")
+var (
+	// DefaultStorageSize is the default size for persistent storage
+	DefaultStorageSize = resource.MustParse("10Gi")
+	// Default requests ensure the HPA and scheduler have baseline values
+	DefaultServerCPURequest    = resource.MustParse("500m")
+	DefaultServerMemoryRequest = resource.MustParse("1Gi")
+)
 
 // DistributionType defines the distribution configuration for llama-stack.
 // +kubebuilder:validation:XValidation:rule="!(has(self.name) && has(self.image))",message="Only one of name or image can be specified"
@@ -69,13 +75,60 @@ type LlamaStackDistributionSpec struct {
 	// +kubebuilder:default:=1
 	Replicas int32      `json:"replicas,omitempty"`
 	Server   ServerSpec `json:"server"`
+	// Network defines network access controls for the LlamaStack service
+	// +optional
+	Network *NetworkSpec `json:"network,omitempty"`
+}
+
+// NetworkSpec defines network access controls for the LlamaStack service.
+type NetworkSpec struct {
+	// ExposeRoute when true, creates an Ingress for external access.
+	// Default is false (internal access only).
+	// +optional
+	// +kubebuilder:default:=false
+	ExposeRoute bool `json:"exposeRoute,omitempty"`
+
+	// AllowedFrom defines which namespaces are allowed to access the LlamaStack service.
+	// By default, only the LLSD namespace and the operator namespace are allowed.
+	// +optional
+	AllowedFrom *AllowedFromSpec `json:"allowedFrom,omitempty"`
+}
+
+// AllowedFromSpec defines namespace-based access controls for NetworkPolicies.
+type AllowedFromSpec struct {
+	// Namespaces is an explicit list of namespace names allowed to access the service.
+	// Use "*" to allow all namespaces.
+	// +optional
+	Namespaces []string `json:"namespaces,omitempty"`
+
+	// Labels is a list of namespace label keys that are allowed to access the service.
+	// A namespace matching any of these labels will be granted access (OR semantics).
+	// Example: ["myproject/lls-allowed", "team/authorized"]
+	// +optional
+	Labels []string `json:"labels,omitempty"`
 }
 
 // ServerSpec defines the desired state of llama server.
 type ServerSpec struct {
 	Distribution  DistributionType `json:"distribution"`
 	ContainerSpec ContainerSpec    `json:"containerSpec,omitempty"`
-	PodOverrides  *PodOverrides    `json:"podOverrides,omitempty"` // Optional pod-level overrides
+	// Workers configures the number of uvicorn worker processes to run.
+	// When set, the operator will launch llama-stack using uvicorn with the specified worker count.
+	// Ref: https://fastapi.tiangolo.com/deployment/server-workers/
+	// CPU requests are set to the number of workers when set, otherwise 1 full core
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	Workers      *int32        `json:"workers,omitempty"`
+	PodOverrides *PodOverrides `json:"podOverrides,omitempty"` // Optional pod-level overrides
+	// PodDisruptionBudget controls voluntary disruption tolerance for the server pods
+	// +optional
+	PodDisruptionBudget *PodDisruptionBudgetSpec `json:"podDisruptionBudget,omitempty"`
+	// TopologySpreadConstraints defines fine-grained spreading rules
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	// Autoscaling configures HorizontalPodAutoscaler for the server pods
+	// +optional
+	Autoscaling *AutoscalingSpec `json:"autoscaling,omitempty"`
 	// Storage defines the persistent storage configuration
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
@@ -85,6 +138,81 @@ type ServerSpec struct {
 	// TLSConfig defines the TLS configuration for the llama-stack server
 	// +optional
 	TLSConfig *TLSConfig `json:"tlsConfig,omitempty"`
+	// ExternalProviders defines external provider packages to inject at deployment time
+	// +optional
+	ExternalProviders *ExternalProvidersSpec `json:"externalProviders,omitempty"`
+}
+
+// ExternalProvidersSpec organizes external providers by API type.
+// Each API type section contains a list of external provider references
+// that will be installed and configured at pod startup.
+type ExternalProvidersSpec struct {
+	// VolumeSizeLimit is the size limit for the shared emptyDir volume used by external providers.
+	// Typical provider with dependencies uses 100-500 MB; default supports 4-20 providers.
+	// +optional
+	// +kubebuilder:default:="2Gi"
+	VolumeSizeLimit *resource.Quantity `json:"volumeSizeLimit,omitempty"`
+
+	// Inference providers for model inference APIs
+	// +optional
+	Inference []ExternalProviderRef `json:"inference,omitempty"`
+
+	// Safety providers for content moderation and safety APIs
+	// +optional
+	Safety []ExternalProviderRef `json:"safety,omitempty"`
+
+	// Agents providers for agent-related APIs
+	// +optional
+	Agents []ExternalProviderRef `json:"agents,omitempty"`
+
+	// VectorIO providers for vector database operations
+	// +optional
+	VectorIO []ExternalProviderRef `json:"vectorIo,omitempty"`
+
+	// DatasetIO providers for dataset operations
+	// +optional
+	DatasetIO []ExternalProviderRef `json:"datasetIo,omitempty"`
+
+	// Scoring providers for evaluation scoring
+	// +optional
+	Scoring []ExternalProviderRef `json:"scoring,omitempty"`
+
+	// Eval providers for evaluation APIs
+	// +optional
+	Eval []ExternalProviderRef `json:"eval,omitempty"`
+
+	// ToolRuntime providers for tool execution
+	// +optional
+	ToolRuntime []ExternalProviderRef `json:"toolRuntime,omitempty"`
+
+	// PostTraining providers for post-training operations
+	// +optional
+	PostTraining []ExternalProviderRef `json:"postTraining,omitempty"`
+}
+
+// ExternalProviderRef references an external provider container image.
+// The provider image must contain provider packages and metadata at standard locations.
+type ExternalProviderRef struct {
+	// ProviderID is the unique identifier for this provider instance.
+	// Must be unique across all providers (inline, remote, and external).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	ProviderID string `json:"providerId"`
+
+	// Image is the container image reference containing the provider packages.
+	// The image must contain /lls-provider/lls-provider-spec.yaml and /lls-provider/packages/.
+	// +kubebuilder:validation:Required
+	Image string `json:"image"`
+
+	// ImagePullPolicy determines when to pull the provider image.
+	// +optional
+	// +kubebuilder:default:=IfNotPresent
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// Config contains provider-specific configuration that will be passed to the provider.
+	// +optional
+	Config *apiextensionsv1.JSON `json:"config,omitempty"`
 }
 
 type UserConfigSpec struct {
@@ -148,6 +276,31 @@ type PodOverrides struct {
 	VolumeMounts       []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 }
 
+// PodDisruptionBudgetSpec defines voluntary disruption controls.
+type PodDisruptionBudgetSpec struct {
+	// MinAvailable is the minimum number of pods that must remain available
+	// +optional
+	MinAvailable *intstr.IntOrString `json:"minAvailable,omitempty"`
+	// MaxUnavailable is the maximum number of pods that can be disrupted simultaneously
+	// +optional
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+}
+
+// AutoscalingSpec configures HorizontalPodAutoscaler targets.
+type AutoscalingSpec struct {
+	// MinReplicas is the lower bound replica count maintained by the HPA
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+	// MaxReplicas is the upper bound replica count maintained by the HPA
+	MaxReplicas int32 `json:"maxReplicas"`
+	// TargetCPUUtilizationPercentage configures CPU based scaling
+	// +optional
+	TargetCPUUtilizationPercentage *int32 `json:"targetCPUUtilizationPercentage,omitempty"`
+	// TargetMemoryUtilizationPercentage configures memory based scaling
+	// +optional
+	TargetMemoryUtilizationPercentage *int32 `json:"targetMemoryUtilizationPercentage,omitempty"`
+}
+
 // ProviderInfo represents a single provider from the providers endpoint.
 type ProviderInfo struct {
 	API          string               `json:"api"`
@@ -193,6 +346,56 @@ type VersionInfo struct {
 	LastUpdated metav1.Time `json:"lastUpdated,omitempty"`
 }
 
+// ExternalProviderPhase represents the installation phase of an external provider.
+// +kubebuilder:validation:Enum=Pending;Installing;Ready;Failed
+type ExternalProviderPhase string
+
+const (
+	// ExternalProviderPhasePending indicates the provider is waiting to be installed
+	ExternalProviderPhasePending ExternalProviderPhase = "Pending"
+	// ExternalProviderPhaseInstalling indicates the provider is being installed
+	ExternalProviderPhaseInstalling ExternalProviderPhase = "Installing"
+	// ExternalProviderPhaseReady indicates the provider is installed and ready
+	ExternalProviderPhaseReady ExternalProviderPhase = "Ready"
+	// ExternalProviderPhaseFailed indicates the provider installation failed
+	ExternalProviderPhaseFailed ExternalProviderPhase = "Failed"
+)
+
+// Condition types for ExternalProviderStatus
+const (
+	// ConditionTypeExternalProviderInstalled indicates whether provider packages were installed successfully
+	ConditionTypeExternalProviderInstalled = "Installed"
+	// ConditionTypeExternalProviderValidated indicates whether provider passed preflight validation
+	ConditionTypeExternalProviderValidated = "Validated"
+)
+
+// ExternalProviderStatus tracks the installation status of an individual external provider.
+type ExternalProviderStatus struct {
+	// ProviderID is the unique identifier for this provider instance
+	ProviderID string `json:"providerId"`
+
+	// Image is the container image reference for this provider
+	Image string `json:"image"`
+
+	// Phase represents the current installation phase of the provider
+	Phase ExternalProviderPhase `json:"phase"`
+
+	// Message provides human-readable details about the current phase
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// InitContainerName is the name of the init container responsible for installing this provider
+	// +optional
+	InitContainerName string `json:"initContainerName,omitempty"`
+
+	// LastTransitionTime is the last time the phase transitioned
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+
+	// Conditions represent detailed status of the provider installation
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
 // LlamaStackDistributionStatus defines the observed state of LlamaStackDistribution.
 type LlamaStackDistributionStatus struct {
 	// Phase represents the current phase of the distribution
@@ -207,6 +410,13 @@ type LlamaStackDistributionStatus struct {
 	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
 	// ServiceURL is the internal Kubernetes service URL where the distribution is exposed
 	ServiceURL string `json:"serviceURL,omitempty"`
+	// RouteURL is the external URL where the distribution is exposed (when exposeRoute is true).
+	// nil when external access is not configured, empty string when Ingress exists but URL not ready.
+	// +optional
+	RouteURL *string `json:"routeURL,omitempty"`
+	// ExternalProviderStatus tracks the installation status of each external provider
+	// +optional
+	ExternalProviderStatus []ExternalProviderStatus `json:"externalProviderStatus,omitempty"`
 }
 
 //+kubebuilder:object:root=true
