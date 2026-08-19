@@ -34,3 +34,15 @@ catalog-item
 config/manifests/bases/llama-stack-k8s-operator.clusterserviceversion.yaml
 
 .DS_Store
+
+# AI tool / dev artifacts
+**/.claude/
+**/.codex/
+**/.mcp.json
+**/.agents/
+**/.beads/
+**/.style/
+**/.specify/**
+!**/.specify/memory/
+!**/.specify/memory/**
+.playwright-mcp/
